@@ -46,6 +46,15 @@ resilience4j:
         maxAttempts: 3
         waitDuration: 5s
         enableExponentialBackoff: false
+        retryExceptions:
+          - feign.RetryableException
+          - feign.FeignException$FeignServerException
+          - java.net.SocketTimeoutException
+          - java.net.ConnectException
+          - java.io.IOException
+        ignoreExceptions:
+          - iuh.fit.shared.error.BusinessException
+          - feign.FeignException$FeignClientException
 
 services:
   user-service:
