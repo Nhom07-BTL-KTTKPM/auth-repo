@@ -18,6 +18,8 @@ public class RefreshToken implements Serializable {
     private String tokenId;
     private String tokenValue;
     private UUID accountId;
+    private String email;
+    private String role;
 
     @Builder.Default
     private boolean revoked = false;

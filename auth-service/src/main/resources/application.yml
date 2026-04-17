@@ -59,6 +59,13 @@ auth:
     refresh-token-expiration: ${AUTH_JWT_REFRESH_TOKEN_EXPIRATION:7d}
   redis:
     refresh-token-key-prefix: ${AUTH_REDIS_REFRESH_TOKEN_KEY_PREFIX:refresh:}
+  cookie:
+    refresh-token-name: ${AUTH_COOKIE_REFRESH_TOKEN_NAME:refreshTokenId}
+    secure: ${AUTH_COOKIE_SECURE:true}
+    http-only: ${AUTH_COOKIE_HTTP_ONLY:true}
+    same-site: ${AUTH_COOKIE_SAME_SITE:Strict}
+    path: ${AUTH_COOKIE_PATH:/api/v1/auth}
+    domain: ${AUTH_COOKIE_DOMAIN:}
   rate-limit:
     login-register:
       capacity: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_CAPACITY:5}
