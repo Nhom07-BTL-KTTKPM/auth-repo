@@ -1,10 +1,12 @@
 package iuh.fit.authservice.auth.service;
 
 import io.github.resilience4j.retry.annotation.Retry;
+import feign.FeignException;
 import iuh.fit.authservice.auth.dto.AuthTokenPair;
 import iuh.fit.authservice.auth.dto.LoginRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
 import iuh.fit.authservice.auth.dto.RegisterResponse;
+import iuh.fit.authservice.client.UserServiceErrorMapper;
 import iuh.fit.authservice.client.UserServiceClient;
 import iuh.fit.authservice.client.dto.UserAuthProfileResponse;
 import iuh.fit.authservice.client.dto.UserRegisterRequest;
@@ -18,43 +20,51 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
+import java.util.function.Supplier;
 
 @Service
 public class AuthService {
 
     private final UserServiceClient userServiceClient;
+    private final UserServiceErrorMapper userServiceErrorMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenService refreshTokenService;
 
     public AuthService(
             UserServiceClient userServiceClient,
+            UserServiceErrorMapper userServiceErrorMapper,
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenService refreshTokenService
     ) {
         this.userServiceClient = userServiceClient;
+        this.userServiceErrorMapper = userServiceErrorMapper;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenService = refreshTokenService;
     }
 
-    @Retry(name = "userServiceRetry")
+    @Retry(name = "userServiceRetry", fallbackMethod = "registerFallback")
     public RegisterResponse register(RegisterRequest request) {
         ApiResponse<UserAuthProfileResponse> response = userServiceClient.register(
-                new UserRegisterRequest(
-                        request.email(),
-                        request.password(),
-                        request.fullName(),
-                        request.phoneNumber()
-                )
+            new UserRegisterRequest(
+                request.email(),
+                request.password(),
+                request.fullName(),
+                request.phoneNumber()
+            )
         );
 
-        UserAuthProfileResponse user = extractResponseData(response, "Register failed");
+        UserAuthProfileResponse user = extractResponseData(
+                response,
+                ErrorCode.BAD_REQUEST,
+                "Register failed"
+        );
         return new RegisterResponse(user.accountId(), user.email(), user.role());
     }
 
-    @Retry(name = "userServiceRetry")
+    @Retry(name = "userServiceRetry", fallbackMethod = "loginFallback")
     public AuthTokenPair login(LoginRequest request, String deviceInfo, String ipAddress) {
         UserAuthProfileResponse user = getUserByEmail(request.email());
 
@@ -121,6 +131,14 @@ public class AuthService {
         return jwtTokenProvider.parseClaimsMap(accessToken);
     }
 
+    private RegisterResponse registerFallback(RegisterRequest request, Throwable throwable) {
+        throw userServiceErrorMapper.mapRetryExhausted("register-user", request.email(), throwable);
+    }
+
+    private AuthTokenPair loginFallback(LoginRequest request, String deviceInfo, String ipAddress, Throwable throwable) {
+        throw userServiceErrorMapper.mapRetryExhausted("get-user-by-email", request.email(), throwable);
+    }
+
     private AuthTokenPair issueTokenPair(UserAuthProfileResponse user, String deviceInfo, String ipAddress) {
         String accessToken = jwtTokenProvider.generateAccessToken(user.accountId(), user.email(), user.role());
 
@@ -148,14 +166,84 @@ public class AuthService {
     }
 
     private UserAuthProfileResponse getUserByEmail(String email) {
-        ApiResponse<UserAuthProfileResponse> response = userServiceClient.getByEmail(email);
-        return extractResponseData(response, "User lookup failed");
+        ApiResponse<UserAuthProfileResponse> response = executeUserServiceCall(
+                "get-user-by-email",
+                email,
+                () -> userServiceClient.getByEmail(email)
+        );
+
+        if (response == null || !response.success() || response.data() == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
+        }
+
+        return response.data();
     }
 
-    private static UserAuthProfileResponse extractResponseData(ApiResponse<UserAuthProfileResponse> response, String fallbackMessage) {
+    private ApiResponse<UserAuthProfileResponse> callRegisterUser(RegisterRequest request) {
+        return executeUserServiceCall(
+                "register-user",
+                request.email(),
+                () -> userServiceClient.register(
+                        new UserRegisterRequest(
+                                request.email(),
+                                request.password(),
+                                request.fullName(),
+                                request.phoneNumber()
+                        )
+                )
+        );
+    }
+
+    private <T> T executeUserServiceCall(String operation, String email, Supplier<T> action) {
+        try {
+            return action.get();
+        } catch (FeignException.FeignClientException ex) {
+            throw userServiceErrorMapper.mapClientException(operation, email, ex);
+        }
+    }
+
+    private static UserAuthProfileResponse extractResponseData(
+            ApiResponse<UserAuthProfileResponse> response,
+            ErrorCode defaultCode,
+            String fallbackMessage
+    ) {
         if (response == null || !response.success() || response.data() == null) {
-            throw new BusinessException(ErrorCode.BAD_REQUEST, fallbackMessage);
+            throw toBusinessException(response, defaultCode, fallbackMessage);
         }
         return response.data();
     }
+
+    private static BusinessException toBusinessException(ApiResponse<?> response, ErrorCode defaultCode, String defaultMessage) {
+        if (response == null) {
+            return new BusinessException(defaultCode, defaultMessage);
+        }
+
+        if (response.error() == null) {
+            String message = (response.message() == null || response.message().isBlank())
+                    ? defaultMessage
+                    : response.message();
+            return new BusinessException(defaultCode, message);
+        }
+
+        ErrorCode mappedCode = mapErrorCode(response.error().code(), defaultCode);
+        String message = (response.error().detail() == null || response.error().detail().isBlank())
+                ? defaultMessage
+                : response.error().detail();
+        return new BusinessException(mappedCode, message, response.error().metadata());
+    }
+
+    private static ErrorCode mapErrorCode(String code, ErrorCode defaultCode) {
+        if (code == null || code.isBlank()) {
+            return defaultCode;
+        }
+
+        for (ErrorCode errorCode : ErrorCode.values()) {
+            if (errorCode.code().equalsIgnoreCase(code)) {
+                return errorCode;
+            }
+        }
+
+        return defaultCode;
+    }
+
 }
