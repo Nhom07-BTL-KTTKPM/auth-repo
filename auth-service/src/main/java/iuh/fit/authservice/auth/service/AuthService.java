@@ -179,21 +179,6 @@ public class AuthService {
         return response.data();
     }
 
-    private ApiResponse<UserAuthProfileResponse> callRegisterUser(RegisterRequest request) {
-        return executeUserServiceCall(
-                "register-user",
-                request.email(),
-                () -> userServiceClient.register(
-                        new UserRegisterRequest(
-                                request.email(),
-                                request.password(),
-                                request.fullName(),
-                                request.phoneNumber()
-                        )
-                )
-        );
-    }
-
     private <T> T executeUserServiceCall(String operation, String email, Supplier<T> action) {
         try {
             return action.get();
