@@ -54,7 +54,7 @@ services:
 auth:
   jwt:
     issuer: ${AUTH_JWT_ISSUER:auth-service}
-    secret: ${AUTH_JWT_SECRET:change-this-secret-in-env}
+    secret: ${AUTH_JWT_SECRET:NUQyuZhoBd6u6O6dAP30Rgu5bqv5TdzpKreGhZGExSaHXEQIM3kicw9uptSaJP9Q}
     access-token-expiration: ${AUTH_JWT_ACCESS_TOKEN_EXPIRATION:15m}
     refresh-token-expiration: ${AUTH_JWT_REFRESH_TOKEN_EXPIRATION:7d}
   redis:
@@ -68,6 +68,7 @@ auth:
     domain: ${AUTH_COOKIE_DOMAIN:}
   rate-limit:
     login-register:
+      enabled: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_ENABLED:true}
       capacity: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_CAPACITY:5}
       refill-tokens: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_REFILL_TOKENS:5}
       refill-duration: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_REFILL_DURATION:1m}
