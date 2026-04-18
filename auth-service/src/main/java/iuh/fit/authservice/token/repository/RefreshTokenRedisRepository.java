@@ -1,5 +1,6 @@
 package iuh.fit.authservice.token.repository;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import iuh.fit.authservice.token.model.RefreshToken;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -13,13 +14,18 @@ import java.util.concurrent.TimeUnit;
 @Repository
 public class RefreshTokenRedisRepository {
 
-    private final RedisTemplate<String, RefreshToken> refreshTokenRedisTemplate;
+    private final RedisTemplate<String, Object> refreshTokenRedisTemplate;
+    private final ObjectMapper objectMapper;
 
     @Value("${auth.redis.refresh-token-key-prefix:refresh:}")
     private String refreshTokenKeyPrefix;
 
-    public RefreshTokenRedisRepository(RedisTemplate<String, RefreshToken> refreshTokenRedisTemplate) {
+    public RefreshTokenRedisRepository(
+            RedisTemplate<String, Object> refreshTokenRedisTemplate,
+            ObjectMapper objectMapper
+    ) {
         this.refreshTokenRedisTemplate = refreshTokenRedisTemplate;
+        this.objectMapper = objectMapper;
     }
 
     public RefreshToken save(RefreshToken refreshToken) {
@@ -30,7 +36,8 @@ public class RefreshTokenRedisRepository {
     }
 
     public Optional<RefreshToken> findById(String tokenId) {
-        return Optional.ofNullable(refreshTokenRedisTemplate.opsForValue().get(keyFor(tokenId)));
+        Object rawValue = refreshTokenRedisTemplate.opsForValue().get(keyFor(tokenId));
+        return Optional.ofNullable(toRefreshToken(rawValue));
     }
 
     public RefreshToken update(RefreshToken refreshToken) {
@@ -100,5 +107,15 @@ public class RefreshTokenRedisRepository {
         if (refreshToken.getTokenId() == null || refreshToken.getTokenId().isBlank()) {
             throw new IllegalArgumentException("tokenId must not be blank");
         }
+    }
+
+    private RefreshToken toRefreshToken(Object rawValue) {
+        if (rawValue == null) {
+            return null;
+        }
+        if (rawValue instanceof RefreshToken refreshToken) {
+            return refreshToken;
+        }
+        return objectMapper.convertValue(rawValue, RefreshToken.class);
     }
 }
