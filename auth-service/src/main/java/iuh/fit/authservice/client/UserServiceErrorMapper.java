@@ -6,12 +6,21 @@ import iuh.fit.shared.error.BusinessException;
 import iuh.fit.shared.error.ErrorCode;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.util.Map;
 
 @Component
 public class UserServiceErrorMapper {
+
+    public boolean isUserServiceFailure(Throwable throwable) {
+        return findCause(throwable, FeignException.class) != null
+                || findCause(throwable, RetryableException.class) != null
+                || findCause(throwable, SocketTimeoutException.class) != null
+                || findCause(throwable, ConnectException.class) != null
+                || findCause(throwable, IOException.class) != null;
+    }
 
     public BusinessException mapClientException(String operation, String email, FeignException.FeignClientException exception) {
         int status = exception.status();
@@ -40,15 +49,17 @@ public class UserServiceErrorMapper {
     }
 
     public BusinessException mapRetryExhausted(String operation, String email, Throwable throwable) {
-        Throwable root = rootCause(throwable);
-
-        if (root instanceof BusinessException businessException) {
+        BusinessException businessException = findCause(throwable, BusinessException.class);
+        if (businessException != null) {
             return businessException;
         }
 
-        if (root instanceof FeignException.FeignClientException clientException) {
+        FeignException.FeignClientException clientException = findCause(throwable, FeignException.FeignClientException.class);
+        if (clientException != null) {
             return mapClientException(operation, email, clientException);
         }
+
+        Throwable root = rootCause(throwable);
 
         String reason = "unknown";
         if (root instanceof RetryableException || root instanceof SocketTimeoutException) {
@@ -76,5 +87,20 @@ public class UserServiceErrorMapper {
             current = current.getCause();
         }
         return current == null ? throwable : current;
+    }
+
+    private static <T extends Throwable> T findCause(Throwable throwable, Class<T> targetType) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (targetType.isInstance(current)) {
+                return targetType.cast(current);
+            }
+            Throwable next = current.getCause();
+            if (next == current) {
+                break;
+            }
+            current = next;
+        }
+        return null;
     }
 }

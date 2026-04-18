@@ -1,4 +1,4 @@
-spring:
+﻿spring:
   application:
     name: auth-service
   datasource:
@@ -18,7 +18,7 @@ spring:
       timeout: ${SPRING_DATA_REDIS_TIMEOUT:2s}
 
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:8081}
 
 eureka:
   client:
@@ -37,7 +37,7 @@ feign:
         readTimeout: ${FEIGN_USER_SERVICE_READ_TIMEOUT:5000}
         loggerLevel: basic
   circuitbreaker:
-    enabled: true
+    enabled: ${FEIGN_CIRCUITBREAKER_ENABLED:false}
 
 resilience4j:
   retry:
@@ -59,6 +59,9 @@ resilience4j:
 services:
   user-service:
     url: ${USER_SERVICE_URL:http://localhost:8082}
+    internal-auth:
+      header-name: ${USER_SERVICE_INTERNAL_AUTH_HEADER_NAME:X-Internal-Api-Key}
+      api-key: ${USER_SERVICE_INTERNAL_AUTH_API_KEY:change-me-in-prod}
 
 auth:
   jwt:
@@ -88,3 +91,4 @@ management:
     web:
       exposure:
         include: health,info
+
