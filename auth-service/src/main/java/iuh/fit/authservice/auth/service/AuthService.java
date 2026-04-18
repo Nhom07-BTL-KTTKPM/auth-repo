@@ -16,6 +16,8 @@ import iuh.fit.authservice.token.service.RefreshTokenService;
 import iuh.fit.shared.api.ApiResponse;
 import iuh.fit.shared.error.BusinessException;
 import iuh.fit.shared.error.ErrorCode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +26,8 @@ import java.util.function.Supplier;
 
 @Service
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private final UserServiceClient userServiceClient;
     private final UserServiceErrorMapper userServiceErrorMapper;
@@ -132,11 +136,41 @@ public class AuthService {
     }
 
     private RegisterResponse registerFallback(RegisterRequest request, Throwable throwable) {
-        throw userServiceErrorMapper.mapRetryExhausted("register-user", request.email(), throwable);
+        BusinessException mapped = userServiceErrorMapper.mapRetryExhausted("register-user", request.email(), throwable);
+        if (mapped.getErrorCode() == ErrorCode.INTERNAL_SERVER_ERROR
+                && !userServiceErrorMapper.isUserServiceFailure(throwable)) {
+            log.error("Register failed due to internal auth-service error for email={}", request.email(), throwable);
+            throw new BusinessException(
+                    ErrorCode.INTERNAL_SERVER_ERROR,
+                    "Registration is temporarily unavailable. Please try again later."
+            );
+        }
+
+        if (mapped.getErrorCode() == ErrorCode.INTERNAL_SERVER_ERROR) {
+            log.error("User-service call failed during register-user for email={}", request.email(), throwable);
+        } else {
+            log.debug("Register fallback mapped to business error for email={}, code={}", request.email(), mapped.getErrorCode().code());
+        }
+        throw mapped;
     }
 
     private AuthTokenPair loginFallback(LoginRequest request, String deviceInfo, String ipAddress, Throwable throwable) {
-        throw userServiceErrorMapper.mapRetryExhausted("get-user-by-email", request.email(), throwable);
+        BusinessException mapped = userServiceErrorMapper.mapRetryExhausted("get-user-by-email", request.email(), throwable);
+        if (mapped.getErrorCode() == ErrorCode.INTERNAL_SERVER_ERROR
+                && !userServiceErrorMapper.isUserServiceFailure(throwable)) {
+            log.error("Login failed due to internal auth-service error for email={}", request.email(), throwable);
+            throw new BusinessException(
+                    ErrorCode.INTERNAL_SERVER_ERROR,
+                    "Authentication is temporarily unavailable. Please try again later."
+            );
+        }
+
+        if (mapped.getErrorCode() == ErrorCode.INTERNAL_SERVER_ERROR) {
+            log.error("User-service call failed during get-user-by-email for email={}", request.email(), throwable);
+        } else {
+            log.debug("Login fallback mapped to business error for email={}, code={}", request.email(), mapped.getErrorCode().code());
+        }
+        throw mapped;
     }
 
     private AuthTokenPair issueTokenPair(UserAuthProfileResponse user, String deviceInfo, String ipAddress) {
