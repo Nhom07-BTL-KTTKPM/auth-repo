@@ -32,16 +32,19 @@ jobs:
         distribution: 'temurin'
         cache: maven
 
-    # 4. Cấp quyền chạy file bash
-    - name: Grant execute permission for Maven wrappers
-      run: |
-        chmod +x shared-library-repo/shared-library/mvnw
-        chmod +x auth-service/mvnw
-
-    # 5. Build và Install shared-library vào local maven (.m2)
+    # 4. Tìm và cấp quyền chạy file bash, sau đó build shared-library
     - name: Build & Install Shared Library
-      working-directory: ./shared-library-repo/shared-library
-      run: ./mvnw clean install -DskipTests
+      run: |
+        # Cấp quyền cho mvnw của auth-service
+        chmod +x auth-service/mvnw
+        
+        # Tìm thư mục chứa pom.xml của shared-library (do cấu trúc repo trên GitHub có thể khác local)
+        SHARED_DIR=$(dirname $(find shared-library-repo -name pom.xml | head -n 1))
+        echo "Found shared-library at: $SHARED_DIR"
+        
+        cd $SHARED_DIR
+        chmod +x mvnw
+        ./mvnw clean install -DskipTests
       
     # 6. Build và Test Auth Service
     - name: Build & Test Auth Service
