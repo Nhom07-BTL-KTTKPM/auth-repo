@@ -6,6 +6,11 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import iuh.fit.authservice.account.enums.AccountRole;
+import iuh.fit.authservice.account.enums.AccountStatus;
+import iuh.fit.authservice.account.enums.AuthProvider;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -36,20 +41,37 @@ public class Account {
     @Column(nullable = false, length = 255)
     private String email;
 
-    @Column(nullable = false, length = 120)
+    @Column(length = 120)
     private String passwordHash;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
-    private String role;
+    private AccountRole role;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 30)
+    private AccountStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 30)
+    private AuthProvider provider;
+
+    @Column(length = 255)
+    private String providerId;
 
     @Column(nullable = false)
-    private Boolean active;
+    private Boolean emailVerified;
+
+    @Column(length = 500)
+    private String avatarUrl;
 
     @Column(nullable = false, length = 120)
     private String fullName;
 
     @Column(nullable = false, length = 20)
     private String phoneNumber;
+
+    private Instant lastLoginAt;
 
     @CreationTimestamp
     @Column(nullable = false, updatable = false)

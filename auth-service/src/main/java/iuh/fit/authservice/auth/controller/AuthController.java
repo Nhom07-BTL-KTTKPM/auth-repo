@@ -114,10 +114,7 @@ public class AuthController {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "Missing authentication principal");
         }
 
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("accountId", jwt.getSubject());
-        data.put("email", jwt.getClaimAsString("email"));
-        data.put("role", jwt.getClaimAsString("role"));
+        Map<String, Object> data = authService.getProfile(jwt.getSubject());
         data.put("issuedAt", jwt.getIssuedAt());
         data.put("expiresAt", jwt.getExpiresAt());
 
