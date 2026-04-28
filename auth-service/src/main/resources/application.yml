@@ -1,4 +1,4 @@
-﻿spring:
+spring:
   application:
     name: auth-service
   datasource:
@@ -29,39 +29,7 @@ eureka:
   instance:
     prefer-ip-address: true
 
-feign:
-  client:
-    config:
-      user-service:
-        connectTimeout: ${FEIGN_USER_SERVICE_CONNECT_TIMEOUT:5000}
-        readTimeout: ${FEIGN_USER_SERVICE_READ_TIMEOUT:5000}
-        loggerLevel: basic
-  circuitbreaker:
-    enabled: ${FEIGN_CIRCUITBREAKER_ENABLED:false}
 
-resilience4j:
-  retry:
-    instances:
-      userServiceRetry:
-        maxAttempts: 3
-        waitDuration: 5s
-        enableExponentialBackoff: false
-        retryExceptions:
-          - feign.RetryableException
-          - feign.FeignException$FeignServerException
-          - java.net.SocketTimeoutException
-          - java.net.ConnectException
-          - java.io.IOException
-        ignoreExceptions:
-          - iuh.fit.shared.error.BusinessException
-          - feign.FeignException$FeignClientException
-
-services:
-  user-service:
-    url: ${USER_SERVICE_URL:http://localhost:8082}
-    internal-auth:
-      header-name: ${USER_SERVICE_INTERNAL_AUTH_HEADER_NAME:X-Internal-Api-Key}
-      api-key: ${USER_SERVICE_INTERNAL_AUTH_API_KEY:change-me-in-prod}
 
 auth:
   jwt:
