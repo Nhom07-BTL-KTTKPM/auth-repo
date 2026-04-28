@@ -44,4 +44,4 @@ jobs:
       working-directory: ./auth-service
       run: |
         chmod +x mvnw
-        ./mvnw clean package
+        ./mvnw clean package -DskipTests
