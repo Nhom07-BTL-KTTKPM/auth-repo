@@ -226,8 +226,6 @@ public class AuthService {
 
     @Transactional
     public void confirmChangePassword(String accountIdStr, ChangePasswordRequest request) {
-        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
-
         UUID accountId = UUID.fromString(accountIdStr);
         Account account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
@@ -235,6 +233,9 @@ public class AuthService {
         if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
         }
+
+        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
+
         account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         accountRepository.save(account);
     }
