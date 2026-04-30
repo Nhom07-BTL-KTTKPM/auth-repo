@@ -16,6 +16,11 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
       password: ${SPRING_DATA_REDIS_PASSWORD:}
       timeout: ${SPRING_DATA_REDIS_TIMEOUT:2s}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
 
 server:
   port: ${SERVER_PORT:8081}
@@ -53,6 +58,26 @@ auth:
       refill-tokens: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_REFILL_TOKENS:5}
       refill-duration: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_REFILL_DURATION:1m}
       key-prefix: ${AUTH_RATE_LIMIT_LOGIN_REGISTER_KEY_PREFIX:auth:rate-limit:}
+
+  # OTP Config (Forgot/Change Password)
+  otp:
+    length: 6
+    ttl: ${AUTH_OTP_TTL:5m}
+    forgot-password-key-prefix: ${AUTH_OTP_FORGOT_KEY_PREFIX:otp:forgot:}
+    change-password-key-prefix: ${AUTH_OTP_CHANGE_KEY_PREFIX:otp:change:}
+
+  # Email Verify Config
+  verify-email:
+    token-ttl: ${AUTH_VERIFY_TOKEN_TTL:24h}
+    key-prefix: ${AUTH_VERIFY_KEY_PREFIX:verify:}
+
+  # RabbitMQ event publishing
+  rabbitmq:
+    critical-exchange: ${AUTH_RABBITMQ_CRITICAL_EXCHANGE:critical.exchange}
+    notification-exchange: ${AUTH_RABBITMQ_NOTIFICATION_EXCHANGE:notification.exchange}
+    routing:
+      email-verify: email.verify
+      email-otp: email.otp
 
 management:
   endpoints:

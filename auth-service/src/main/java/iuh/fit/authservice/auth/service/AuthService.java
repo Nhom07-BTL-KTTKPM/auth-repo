@@ -21,8 +21,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
+import iuh.fit.authservice.auth.dto.ForgotPasswordRequest;
+import iuh.fit.authservice.auth.dto.ResetPasswordRequest;
+
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class AuthService {
@@ -33,17 +38,23 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenService refreshTokenService;
+    private final OtpService otpService;
+    private final EventPublisherService eventPublisher;
 
     public AuthService(
             AccountRepository accountRepository,
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
-            RefreshTokenService refreshTokenService
+            RefreshTokenService refreshTokenService,
+            OtpService otpService,
+            EventPublisherService eventPublisher
     ) {
         this.accountRepository = accountRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenService = refreshTokenService;
+        this.otpService = otpService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -70,6 +81,9 @@ public class AuthService {
 
         try {
             Account saved = accountRepository.save(account);
+            // Gửi email xác thực qua notification-service
+            String verifyToken = otpService.generateAndSaveVerifyToken(saved.getId().toString());
+            eventPublisher.publishVerifyEmail(saved.getEmail(), saved.getFullName(), verifyToken);
             return new RegisterResponse(saved.getId(), saved.getEmail(), saved.getRole().name());
         } catch (DataIntegrityViolationException ex) {
             throw new BusinessException(
@@ -172,6 +186,76 @@ public class AuthService {
         data.put("createdAt", account.getCreatedAt());
         
         return data;
+    }
+
+    // ── Forgot Password ───────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public void forgotPassword(ForgotPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
+
+        String otp = otpService.generateAndSaveForgotPasswordOtp(email);
+        eventPublisher.publishOtpEmail(email, account.getFullName(), otp, "FORGOT_PASSWORD");
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        otpService.verifyForgotPasswordOtp(email, request.otp());
+
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
+
+        account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        accountRepository.save(account);
+    }
+
+    // ── Change Password (cần đăng nhập) ──────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public void requestChangePassword(String accountIdStr) {
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        String otp = otpService.generateAndSaveChangePasswordOtp(accountIdStr);
+        eventPublisher.publishOtpEmail(account.getEmail(), account.getFullName(), otp, "CHANGE_PASSWORD");
+    }
+
+    @Transactional
+    public void confirmChangePassword(String accountIdStr, ChangePasswordRequest request) {
+        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
+
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
+        }
+        account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        accountRepository.save(account);
+    }
+
+    // ── Verify Email ──────────────────────────────────────────────────────────
+
+    @Transactional
+    public void verifyEmail(String token) {
+        String accountIdStr = otpService.getAccountIdByVerifyToken(token);
+        if (accountIdStr == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
+        }
+
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        account.setEmailVerified(true);
+        account.setStatus(iuh.fit.authservice.account.enums.AccountStatus.ACTIVE);
+        accountRepository.save(account);
+        otpService.deleteVerifyToken(token);
     }
 
     private AuthTokenPair issueTokenPair(Account account, String deviceInfo, String ipAddress) {

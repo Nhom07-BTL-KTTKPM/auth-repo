@@ -2,10 +2,13 @@ package iuh.fit.authservice.auth.controller;
 
 import iuh.fit.authservice.auth.dto.AuthTokenPair;
 import iuh.fit.authservice.auth.dto.AuthTokenResponse;
+import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
+import iuh.fit.authservice.auth.dto.ForgotPasswordRequest;
 import iuh.fit.authservice.auth.dto.LoginRequest;
 import iuh.fit.authservice.auth.dto.RefreshTokenRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
 import iuh.fit.authservice.auth.dto.RegisterResponse;
+import iuh.fit.authservice.auth.dto.ResetPasswordRequest;
 import iuh.fit.authservice.auth.service.AuthService;
 import iuh.fit.authservice.security.RefreshTokenCookieService;
 import iuh.fit.shared.api.ApiResponse;
@@ -20,12 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -133,6 +131,62 @@ public class AuthController {
         String token = authorizationHeader.substring(7);
         Map<String, Object> claims = authService.parseAndValidateClaims(token);
         return ResponseEntity.ok(ApiResponse.success(claims, "Token claims", resolveTraceId(servletRequest)));
+    }
+
+    // ── Verify Email ─────────────────────────────────────────────────────
+
+    @GetMapping("/verify-email")
+    public ResponseEntity<ApiResponse<Void>> verifyEmail(
+            @RequestParam("token") String token,
+            HttpServletRequest servletRequest
+    ) {
+        authService.verifyEmail(token);
+        return ResponseEntity.ok(ApiResponse.success(null, "Email verified successfully", resolveTraceId(servletRequest)));
+    }
+
+    // ── Forgot Password ───────────────────────────────────────────────────
+
+    @PostMapping("/forgot-password")
+    public ResponseEntity<ApiResponse<Void>> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        authService.forgotPassword(request);
+        return ResponseEntity.ok(ApiResponse.success(null,
+                "OTP sent to your email if it exists", resolveTraceId(servletRequest)));
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<ApiResponse<Void>> resetPassword(
+            @Valid @RequestBody ResetPasswordRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        authService.resetPassword(request);
+        return ResponseEntity.ok(ApiResponse.success(null, "Password reset successfully", resolveTraceId(servletRequest)));
+    }
+
+    // ── Change Password (JWT required) ─────────────────────────────────────
+
+    @PostMapping("/change-password/request")
+    public ResponseEntity<ApiResponse<Void>> requestChangePassword(
+            @AuthenticationPrincipal Jwt jwt,
+            HttpServletRequest servletRequest
+    ) {
+        if (jwt == null) throw new BusinessException(ErrorCode.UNAUTHORIZED, "Authentication required");
+        authService.requestChangePassword(jwt.getSubject());
+        return ResponseEntity.ok(ApiResponse.success(null,
+                "OTP sent to your registered email", resolveTraceId(servletRequest)));
+    }
+
+    @PostMapping("/change-password/confirm")
+    public ResponseEntity<ApiResponse<Void>> confirmChangePassword(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody ChangePasswordRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        if (jwt == null) throw new BusinessException(ErrorCode.UNAUTHORIZED, "Authentication required");
+        authService.confirmChangePassword(jwt.getSubject(), request);
+        return ResponseEntity.ok(ApiResponse.success(null, "Password changed successfully", resolveTraceId(servletRequest)));
     }
 
     private static String resolveClientIp(HttpServletRequest request) {
