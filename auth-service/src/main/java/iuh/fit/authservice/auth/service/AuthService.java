@@ -2,6 +2,9 @@ package iuh.fit.authservice.auth.service;
 
 import iuh.fit.authservice.account.entity.Account;
 import iuh.fit.authservice.account.repository.AccountRepository;
+import iuh.fit.authservice.account.enums.AccountRole;
+import iuh.fit.authservice.account.enums.AccountStatus;
+import iuh.fit.authservice.account.enums.AuthProvider;
 import iuh.fit.authservice.auth.dto.AuthTokenPair;
 import iuh.fit.authservice.auth.dto.LoginRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
@@ -18,30 +21,40 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
+import iuh.fit.authservice.auth.dto.ForgotPasswordRequest;
+import iuh.fit.authservice.auth.dto.ResetPasswordRequest;
+
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
-    private static final String DEFAULT_ROLE = "CUSTOMER";
 
     private final AccountRepository accountRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
     private final RefreshTokenService refreshTokenService;
+    private final OtpService otpService;
+    private final EventPublisherService eventPublisher;
 
     public AuthService(
             AccountRepository accountRepository,
             PasswordEncoder passwordEncoder,
             JwtTokenProvider jwtTokenProvider,
-            RefreshTokenService refreshTokenService
+            RefreshTokenService refreshTokenService,
+            OtpService otpService,
+            EventPublisherService eventPublisher
     ) {
         this.accountRepository = accountRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtTokenProvider = jwtTokenProvider;
         this.refreshTokenService = refreshTokenService;
+        this.otpService = otpService;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -59,14 +72,19 @@ public class AuthService {
         Account account = new Account();
         account.setEmail(email);
         account.setPasswordHash(passwordEncoder.encode(request.password()));
-        account.setRole(DEFAULT_ROLE);
-        account.setActive(Boolean.TRUE);
+        account.setRole(AccountRole.CUSTOMER);
+        account.setStatus(AccountStatus.ACTIVE);
+        account.setProvider(AuthProvider.LOCAL);
+        account.setEmailVerified(true);
         account.setFullName(request.fullName().trim());
         account.setPhoneNumber(request.phoneNumber().trim());
 
         try {
             Account saved = accountRepository.save(account);
-            return new RegisterResponse(saved.getId(), saved.getEmail(), saved.getRole());
+            // Gửi email xác thực qua notification-service
+            String verifyToken = otpService.generateAndSaveVerifyToken(saved.getId().toString());
+            eventPublisher.publishVerifyEmail(saved.getEmail(), saved.getFullName(), verifyToken);
+            return new RegisterResponse(saved.getId(), saved.getEmail(), saved.getRole().name());
         } catch (DataIntegrityViolationException ex) {
             throw new BusinessException(
                     ErrorCode.CONFLICT,
@@ -85,9 +103,12 @@ public class AuthService {
         if (account.getPasswordHash() == null || !passwordEncoder.matches(request.password(), account.getPasswordHash())) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
         }
-        if (Boolean.FALSE.equals(account.getActive())) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "User account is disabled");
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "User account is disabled or pending verification");
         }
+        
+        account.setLastLoginAt(java.time.Instant.now());
+        accountRepository.save(account);
 
         return issueTokenPair(account, deviceInfo, ipAddress);
     }
@@ -145,8 +166,100 @@ public class AuthService {
         return jwtTokenProvider.parseClaimsMap(accessToken);
     }
 
+    @Transactional(readOnly = true)
+    public Map<String, Object> getProfile(String accountIdStr) {
+        java.util.UUID accountId = java.util.UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+        
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("accountId", account.getId().toString());
+        data.put("email", account.getEmail());
+        data.put("role", account.getRole().name());
+        data.put("fullName", account.getFullName());
+        data.put("phoneNumber", account.getPhoneNumber());
+        data.put("status", account.getStatus().name());
+        data.put("provider", account.getProvider().name());
+        data.put("avatarUrl", account.getAvatarUrl());
+        data.put("emailVerified", account.getEmailVerified());
+        data.put("lastLoginAt", account.getLastLoginAt());
+        data.put("createdAt", account.getCreatedAt());
+        
+        return data;
+    }
+
+    // ── Forgot Password ───────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public void forgotPassword(ForgotPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
+
+        String otp = otpService.generateAndSaveForgotPasswordOtp(email);
+        eventPublisher.publishOtpEmail(email, account.getFullName(), otp, "FORGOT_PASSWORD");
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        otpService.verifyForgotPasswordOtp(email, request.otp());
+
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
+
+        account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        accountRepository.save(account);
+    }
+
+    // ── Change Password (cần đăng nhập) ──────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public void requestChangePassword(String accountIdStr) {
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        String otp = otpService.generateAndSaveChangePasswordOtp(accountIdStr);
+        eventPublisher.publishOtpEmail(account.getEmail(), account.getFullName(), otp, "CHANGE_PASSWORD");
+    }
+
+    @Transactional
+    public void confirmChangePassword(String accountIdStr, ChangePasswordRequest request) {
+        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
+
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
+        }
+        account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        accountRepository.save(account);
+    }
+
+    // ── Verify Email ──────────────────────────────────────────────────────────
+
+    @Transactional
+    public void verifyEmail(String token) {
+        String accountIdStr = otpService.getAccountIdByVerifyToken(token);
+        if (accountIdStr == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
+        }
+
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        account.setEmailVerified(true);
+        account.setStatus(iuh.fit.authservice.account.enums.AccountStatus.ACTIVE);
+        accountRepository.save(account);
+        otpService.deleteVerifyToken(token);
+    }
+
     private AuthTokenPair issueTokenPair(Account account, String deviceInfo, String ipAddress) {
-        String accessToken = jwtTokenProvider.generateAccessToken(account.getId(), account.getEmail(), account.getRole());
+        String accessToken = jwtTokenProvider.generateAccessToken(account.getId(), account.getEmail(), account.getRole().name());
 
         String refreshTokenId = jwtTokenProvider.generateRefreshTokenId();
         RefreshToken refreshToken = RefreshToken.builder()
@@ -154,7 +267,7 @@ public class AuthService {
                 .tokenValue(refreshTokenId)
                 .accountId(account.getId())
                 .email(account.getEmail())
-                .role(account.getRole())
+                .role(account.getRole().name())
                 .expiresAt(jwtTokenProvider.calculateRefreshTokenExpiresAt())
                 .deviceInfo(deviceInfo)
                 .ipAddress(ipAddress)
