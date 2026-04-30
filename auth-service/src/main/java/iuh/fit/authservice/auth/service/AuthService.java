@@ -73,9 +73,9 @@ public class AuthService {
         account.setEmail(email);
         account.setPasswordHash(passwordEncoder.encode(request.password()));
         account.setRole(AccountRole.CUSTOMER);
-        account.setStatus(AccountStatus.ACTIVE);
+        account.setStatus(AccountStatus.PENDING_VERIFY);
         account.setProvider(AuthProvider.LOCAL);
-        account.setEmailVerified(true);
+        account.setEmailVerified(false);
         account.setFullName(request.fullName().trim());
         account.setPhoneNumber(request.phoneNumber().trim());
 
@@ -100,11 +100,11 @@ public class AuthService {
         Account account = accountRepository.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password"));
 
-        if (account.getPasswordHash() == null || !passwordEncoder.matches(request.password(), account.getPasswordHash())) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
-        }
         if (account.getStatus() != AccountStatus.ACTIVE) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "User account is disabled or pending verification");
+        }
+        if (account.getPasswordHash() == null || !passwordEncoder.matches(request.password(), account.getPasswordHash())) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
         }
         
         account.setLastLoginAt(java.time.Instant.now());
@@ -226,8 +226,6 @@ public class AuthService {
 
     @Transactional
     public void confirmChangePassword(String accountIdStr, ChangePasswordRequest request) {
-        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
-
         UUID accountId = UUID.fromString(accountIdStr);
         Account account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
@@ -235,6 +233,9 @@ public class AuthService {
         if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
         }
+
+        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
+
         account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         accountRepository.save(account);
     }

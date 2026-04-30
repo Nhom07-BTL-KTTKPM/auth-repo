@@ -36,8 +36,12 @@ public class RefreshTokenRedisRepository {
     }
 
     public Optional<RefreshToken> findById(String tokenId) {
-        Object rawValue = refreshTokenRedisTemplate.opsForValue().get(keyFor(tokenId));
-        return Optional.ofNullable(toRefreshToken(rawValue));
+        try {
+            Object rawValue = refreshTokenRedisTemplate.opsForValue().get(keyFor(tokenId));
+            return Optional.ofNullable(toRefreshToken(rawValue));
+        } catch (Exception e) {
+            return Optional.empty();
+        }
     }
 
     public RefreshToken update(RefreshToken refreshToken) {
