@@ -5,6 +5,7 @@ import iuh.fit.authservice.auth.dto.AuthTokenResponse;
 import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
 import iuh.fit.authservice.auth.dto.ForgotPasswordRequest;
 import iuh.fit.authservice.auth.dto.LoginRequest;
+import iuh.fit.authservice.auth.dto.GoogleLoginRequest;
 import iuh.fit.authservice.auth.dto.RefreshTokenRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
 import iuh.fit.authservice.auth.dto.RegisterResponse;
@@ -68,6 +69,26 @@ public class AuthController {
                     .buildRefreshTokenCookie(tokenPair.refreshTokenId(), tokenPair.refreshTokenExpiresIn())
                     .toString())
             .body(ApiResponse.success(response, "Login successful", resolveTraceId(servletRequest)));
+    }
+
+    @PostMapping("/google")
+    public ResponseEntity<ApiResponse<AuthTokenResponse>> googleLogin(
+            @Valid @RequestBody GoogleLoginRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        AuthTokenPair tokenPair = authService.loginWithGoogle(
+                request.idToken(),
+                servletRequest.getHeader("User-Agent"),
+                resolveClientIp(servletRequest)
+        );
+
+        AuthTokenResponse response = toPublicTokenResponse(tokenPair);
+        return ResponseEntity.ok()
+            .header(HttpHeaders.SET_COOKIE,
+                refreshTokenCookieService
+                    .buildRefreshTokenCookie(tokenPair.refreshTokenId(), tokenPair.refreshTokenExpiresIn())
+                    .toString())
+            .body(ApiResponse.success(response, "Google Login successful", resolveTraceId(servletRequest)));
     }
 
     @PostMapping("/refresh")

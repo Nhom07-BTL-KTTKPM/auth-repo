@@ -25,6 +25,14 @@ import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
 import iuh.fit.authservice.auth.dto.ForgotPasswordRequest;
 import iuh.fit.authservice.auth.dto.ResetPasswordRequest;
 
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import org.springframework.beans.factory.annotation.Value;
+
+import java.util.Collections;
+
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -40,6 +48,7 @@ public class AuthService {
     private final RefreshTokenService refreshTokenService;
     private final OtpService otpService;
     private final EventPublisherService eventPublisher;
+    private final GoogleIdTokenVerifier googleIdTokenVerifier;
 
     public AuthService(
             AccountRepository accountRepository,
@@ -47,7 +56,8 @@ public class AuthService {
             JwtTokenProvider jwtTokenProvider,
             RefreshTokenService refreshTokenService,
             OtpService otpService,
-            EventPublisherService eventPublisher
+            EventPublisherService eventPublisher,
+            @Value("${auth.google.client-id}") String googleClientId
     ) {
         this.accountRepository = accountRepository;
         this.passwordEncoder = passwordEncoder;
@@ -55,6 +65,9 @@ public class AuthService {
         this.refreshTokenService = refreshTokenService;
         this.otpService = otpService;
         this.eventPublisher = eventPublisher;
+        this.googleIdTokenVerifier = new GoogleIdTokenVerifier.Builder(new NetHttpTransport(), new GsonFactory())
+                .setAudience(Collections.singletonList(googleClientId))
+                .build();
     }
 
     @Transactional
@@ -111,6 +124,61 @@ public class AuthService {
         accountRepository.save(account);
 
         return issueTokenPair(account, deviceInfo, ipAddress);
+    }
+
+    @Transactional
+    public AuthTokenPair loginWithGoogle(String idTokenString, String deviceInfo, String ipAddress) {
+        try {
+            GoogleIdToken idToken = googleIdTokenVerifier.verify(idTokenString);
+            if (idToken == null) {
+                throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid Google ID token");
+            }
+            GoogleIdToken.Payload payload = idToken.getPayload();
+            String email = normalizeEmail(payload.getEmail());
+            
+            Account account = accountRepository.findByEmailIgnoreCase(email).orElse(null);
+            
+            if (account == null) {
+                // Register new account
+                account = new Account();
+                account.setEmail(email);
+                account.setRole(AccountRole.CUSTOMER);
+                account.setStatus(AccountStatus.ACTIVE);
+                account.setProvider(AuthProvider.GOOGLE);
+                account.setEmailVerified(true);
+                account.setFullName((String) payload.get("name"));
+                account.setAvatarUrl((String) payload.get("picture"));
+                account.setPhoneNumber(""); // Provide empty string to satisfy NOT NULL constraint
+                account.setProviderId(payload.getSubject());
+                account = accountRepository.save(account);
+                
+                // Publish event to user-service
+                eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), account.getFullName(), account.getPhoneNumber());
+            } else {
+                // Account exists. If provider is LOCAL, link it by updating status to ACTIVE (since Google verified the email)
+                if (account.getProvider() == AuthProvider.LOCAL) {
+                    account.setEmailVerified(true);
+                    if (account.getStatus() == AccountStatus.PENDING_VERIFY) {
+                        account.setStatus(AccountStatus.ACTIVE);
+                        // Publish event since it's now active
+                        eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), account.getFullName(), account.getPhoneNumber());
+                    }
+                    accountRepository.save(account);
+                } else if (account.getStatus() != AccountStatus.ACTIVE) {
+                    throw new BusinessException(ErrorCode.FORBIDDEN, "User account is disabled");
+                }
+            }
+            
+            account.setLastLoginAt(java.time.Instant.now());
+            accountRepository.save(account);
+            
+            return issueTokenPair(account, deviceInfo, ipAddress);
+        } catch (BusinessException e) {
+            throw e; // Re-throw known business errors as-is
+        } catch (Exception e) {
+            log.error("Google login failed", e);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid Google ID token or verification failed");
+        }
     }
 
     public AuthTokenPair refresh(String refreshTokenId, String deviceInfo, String ipAddress) {
@@ -253,9 +321,14 @@ public class AuthService {
         Account account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
 
-        account.setEmailVerified(true);
-        account.setStatus(iuh.fit.authservice.account.enums.AccountStatus.ACTIVE);
-        accountRepository.save(account);
+        if (account.getStatus() == AccountStatus.PENDING_VERIFY) {
+            account.setEmailVerified(true);
+            account.setStatus(iuh.fit.authservice.account.enums.AccountStatus.ACTIVE);
+            accountRepository.save(account);
+            
+            eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), account.getFullName(), account.getPhoneNumber());
+        }
+        
         otpService.deleteVerifyToken(token);
     }
 
