@@ -11,7 +11,12 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 
-@SpringBootTest
+@SpringBootTest(properties = {
+    "spring.datasource.url=jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL",
+    "spring.datasource.driver-class-name=org.h2.Driver",
+    "spring.datasource.username=sa",
+    "spring.datasource.password="
+})
 @ActiveProfiles("test")
 class AuthServiceApplicationTests {
 
