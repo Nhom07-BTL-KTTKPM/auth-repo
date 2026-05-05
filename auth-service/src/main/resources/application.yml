@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
   application:
     name: auth-service
   datasource:
@@ -42,6 +44,8 @@ auth:
     secret: ${AUTH_JWT_SECRET:NUQyuZhoBd6u6O6dAP30Rgu5bqv5TdzpKreGhZGExSaHXEQIM3kicw9uptSaJP9Q}
     access-token-expiration: ${AUTH_JWT_ACCESS_TOKEN_EXPIRATION:15m}
     refresh-token-expiration: ${AUTH_JWT_REFRESH_TOKEN_EXPIRATION:7d}
+  google:
+    client-id: ${AUTH_GOOGLE_CLIENT_ID}
   redis:
     refresh-token-key-prefix: ${AUTH_REDIS_REFRESH_TOKEN_KEY_PREFIX:refresh:}
   cookie:
@@ -78,6 +82,7 @@ auth:
     routing:
       email-verify: email.verify
       email-otp: email.otp
+      account-created: account.created
 
 management:
   endpoints:
