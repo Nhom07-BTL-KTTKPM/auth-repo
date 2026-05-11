@@ -65,12 +65,6 @@ public class Account {
     @Column(length = 500)
     private String avatarUrl;
 
-    @Column(nullable = false, length = 120)
-    private String fullName;
-
-    @Column(nullable = false, length = 20)
-    private String phoneNumber;
-
     private Instant lastLoginAt;
 
     @CreationTimestamp

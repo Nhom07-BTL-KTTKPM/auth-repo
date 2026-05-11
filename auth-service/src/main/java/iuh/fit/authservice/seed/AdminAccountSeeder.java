@@ -40,8 +40,6 @@ public class AdminAccountSeeder implements ApplicationRunner {
         account.setStatus(AccountStatus.ACTIVE);
         account.setProvider(AuthProvider.LOCAL);
         account.setEmailVerified(true);
-        account.setFullName("System Admin");
-        account.setPhoneNumber("0000000000");
 
         accountRepository.save(account);
         logger.info("Seeded admin account: {}", ADMIN_EMAIL);
