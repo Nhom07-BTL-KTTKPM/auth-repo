@@ -1,5 +1,6 @@
 package iuh.fit.authservice.auth.controller;
 
+import iuh.fit.authservice.account.enums.AccountRole;
 import iuh.fit.authservice.auth.dto.AuthTokenPair;
 import iuh.fit.authservice.auth.dto.AuthTokenResponse;
 import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+
 @RestController
 @RequestMapping("/api/v1/auth")
 public class AuthController {
@@ -50,6 +52,18 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(response, "Register successful", resolveTraceId(servletRequest)));
     }
+
+    @PostMapping("internal/register")
+    public ResponseEntity<ApiResponse<RegisterResponse>> internalRegister(
+            @Valid @RequestBody RegisterRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        RegisterResponse response = authService.createInternalAccount(request, AccountRole.EMPLOYEE);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success(response, "Internal account created successfully", resolveTraceId(servletRequest)));
+    }
+    
+    
 
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<AuthTokenResponse>> login(
