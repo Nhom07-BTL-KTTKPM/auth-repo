@@ -4,6 +4,7 @@ public record AccountRegisteredEvent(
         String accountId,
         String email,
         String fullName,
-        String phoneNumber
+        String phoneNumber,
+        String role
 ) {
 }

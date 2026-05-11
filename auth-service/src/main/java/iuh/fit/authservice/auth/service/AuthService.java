@@ -108,6 +108,42 @@ public class AuthService {
         }
     }
 
+    @Transactional
+    public RegisterResponse createInternalAccount(RegisterRequest request, AccountRole role) {
+        String email = normalizeEmail(request.email());
+        String fullName = request.fullName() != null ? request.fullName().trim() : "";
+        String phoneNumber = request.phoneNumber() != null ? request.phoneNumber().trim() : "";
+        // 1. Kiểm tra email tồn tại
+        if (accountRepository.existsByEmailIgnoreCase(email)) {
+            throw new BusinessException(
+                    ErrorCode.CONFLICT,
+                    "Email already exists",
+                    Map.of("email", email)
+            );
+        }
+
+        Account account = new Account();
+        account.setEmail(email);
+        account.setPasswordHash(passwordEncoder.encode(request.password()));
+        account.setRole(role);
+        account.setStatus(AccountStatus.ACTIVE);
+        account.setProvider(AuthProvider.LOCAL);
+        account.setEmailVerified(true);
+
+        account = accountRepository.save(account);
+
+        // 3. Gửi sự kiện tạo Account kèm theo Role
+        eventPublisher.publishAccountCreatedEvent(
+                account.getId().toString(),
+                account.getEmail(),
+                fullName,
+                phoneNumber,
+                account.getRole().name()
+        );
+
+        return new RegisterResponse(account.getId(), account.getEmail(), account.getRole().name());
+    }
+
     @Transactional(readOnly = true)
     public AuthTokenPair login(LoginRequest request, String deviceInfo, String ipAddress) {
         String email = normalizeEmail(request.email());
@@ -154,7 +190,7 @@ public class AuthService {
                 account = accountRepository.save(account);
                 
                 // Publish event to user-service
-                eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber);
+                eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber, account.getRole().name());
             } else {
                 // Account exists. If provider is LOCAL, link it by updating status to ACTIVE (since Google verified the email)
                 if (account.getProvider() == AuthProvider.LOCAL) {
@@ -162,7 +198,7 @@ public class AuthService {
                     if (account.getStatus() == AccountStatus.PENDING_VERIFY) {
                         account.setStatus(AccountStatus.ACTIVE);
                         // Publish event since it's now active
-                        eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber);
+                        eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber, account.getRole().name());
                     }
                     accountRepository.save(account);
                 } else if (account.getStatus() != AccountStatus.ACTIVE) {
@@ -327,7 +363,7 @@ public class AuthService {
 
             String displayName = resolveDisplayName(payload.fullName(), account.getEmail());
             String phoneNumber = payload.phoneNumber() != null ? payload.phoneNumber() : "";
-            eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), displayName, phoneNumber);
+            eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), displayName, phoneNumber, account.getRole().name());
         }
         
         otpService.deleteVerifyToken(token);
