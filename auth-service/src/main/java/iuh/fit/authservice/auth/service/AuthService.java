@@ -9,6 +9,7 @@ import iuh.fit.authservice.auth.dto.AuthTokenPair;
 import iuh.fit.authservice.auth.dto.LoginRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
 import iuh.fit.authservice.auth.dto.RegisterResponse;
+import iuh.fit.authservice.auth.dto.VerifyEmailTokenPayload;
 import iuh.fit.authservice.security.JwtTokenProvider;
 import iuh.fit.authservice.token.model.RefreshToken;
 import iuh.fit.authservice.token.service.RefreshTokenService;
@@ -73,6 +74,8 @@ public class AuthService {
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
         String email = normalizeEmail(request.email());
+        String fullName = request.fullName() != null ? request.fullName().trim() : "";
+        String phoneNumber = request.phoneNumber() != null ? request.phoneNumber().trim() : "";
 
         if (accountRepository.existsByEmailIgnoreCase(email)) {
             throw new BusinessException(
@@ -89,14 +92,12 @@ public class AuthService {
         account.setStatus(AccountStatus.PENDING_VERIFY);
         account.setProvider(AuthProvider.LOCAL);
         account.setEmailVerified(false);
-        account.setFullName(request.fullName().trim());
-        account.setPhoneNumber(request.phoneNumber().trim());
 
         try {
             Account saved = accountRepository.save(account);
             // Gửi email xác thực qua notification-service
-            String verifyToken = otpService.generateAndSaveVerifyToken(saved.getId().toString());
-            eventPublisher.publishVerifyEmail(saved.getEmail(), saved.getFullName(), verifyToken);
+            String verifyToken = otpService.generateAndSaveVerifyToken(saved.getId().toString(), fullName, phoneNumber);
+            eventPublisher.publishVerifyEmail(saved.getEmail(), fullName, verifyToken);
             return new RegisterResponse(saved.getId(), saved.getEmail(), saved.getRole().name());
         } catch (DataIntegrityViolationException ex) {
             throw new BusinessException(
@@ -105,6 +106,42 @@ public class AuthService {
                     Map.of("email", email)
             );
         }
+    }
+
+    @Transactional
+    public RegisterResponse createInternalAccount(RegisterRequest request, AccountRole role) {
+        String email = normalizeEmail(request.email());
+        String fullName = request.fullName() != null ? request.fullName().trim() : "";
+        String phoneNumber = request.phoneNumber() != null ? request.phoneNumber().trim() : "";
+        // 1. Kiểm tra email tồn tại
+        if (accountRepository.existsByEmailIgnoreCase(email)) {
+            throw new BusinessException(
+                    ErrorCode.CONFLICT,
+                    "Email already exists",
+                    Map.of("email", email)
+            );
+        }
+
+        Account account = new Account();
+        account.setEmail(email);
+        account.setPasswordHash(passwordEncoder.encode(request.password()));
+        account.setRole(role);
+        account.setStatus(AccountStatus.ACTIVE);
+        account.setProvider(AuthProvider.LOCAL);
+        account.setEmailVerified(true);
+
+        account = accountRepository.save(account);
+
+        // 3. Gửi sự kiện tạo Account kèm theo Role
+        eventPublisher.publishAccountCreatedEvent(
+                account.getId().toString(),
+                account.getEmail(),
+                fullName,
+                phoneNumber,
+                account.getRole().name()
+        );
+
+        return new RegisterResponse(account.getId(), account.getEmail(), account.getRole().name());
     }
 
     @Transactional(readOnly = true)
@@ -135,6 +172,8 @@ public class AuthService {
             }
             GoogleIdToken.Payload payload = idToken.getPayload();
             String email = normalizeEmail(payload.getEmail());
+            String fullName = payload.get("name") != null ? payload.get("name").toString() : "";
+            String phoneNumber = "";
             
             Account account = accountRepository.findByEmailIgnoreCase(email).orElse(null);
             
@@ -146,14 +185,12 @@ public class AuthService {
                 account.setStatus(AccountStatus.ACTIVE);
                 account.setProvider(AuthProvider.GOOGLE);
                 account.setEmailVerified(true);
-                account.setFullName((String) payload.get("name"));
                 account.setAvatarUrl((String) payload.get("picture"));
-                account.setPhoneNumber(""); // Provide empty string to satisfy NOT NULL constraint
                 account.setProviderId(payload.getSubject());
                 account = accountRepository.save(account);
                 
                 // Publish event to user-service
-                eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), account.getFullName(), account.getPhoneNumber());
+                eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber, account.getRole().name());
             } else {
                 // Account exists. If provider is LOCAL, link it by updating status to ACTIVE (since Google verified the email)
                 if (account.getProvider() == AuthProvider.LOCAL) {
@@ -161,7 +198,7 @@ public class AuthService {
                     if (account.getStatus() == AccountStatus.PENDING_VERIFY) {
                         account.setStatus(AccountStatus.ACTIVE);
                         // Publish event since it's now active
-                        eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), account.getFullName(), account.getPhoneNumber());
+                        eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber, account.getRole().name());
                     }
                     accountRepository.save(account);
                 } else if (account.getStatus() != AccountStatus.ACTIVE) {
@@ -244,8 +281,6 @@ public class AuthService {
         data.put("accountId", account.getId().toString());
         data.put("email", account.getEmail());
         data.put("role", account.getRole().name());
-        data.put("fullName", account.getFullName());
-        data.put("phoneNumber", account.getPhoneNumber());
         data.put("status", account.getStatus().name());
         data.put("provider", account.getProvider().name());
         data.put("avatarUrl", account.getAvatarUrl());
@@ -265,7 +300,7 @@ public class AuthService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
 
         String otp = otpService.generateAndSaveForgotPasswordOtp(email);
-        eventPublisher.publishOtpEmail(email, account.getFullName(), otp, "FORGOT_PASSWORD");
+        eventPublisher.publishOtpEmail(email, resolveDisplayName(null, email), otp, "FORGOT_PASSWORD");
     }
 
     @Transactional
@@ -289,7 +324,7 @@ public class AuthService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
 
         String otp = otpService.generateAndSaveChangePasswordOtp(accountIdStr);
-        eventPublisher.publishOtpEmail(account.getEmail(), account.getFullName(), otp, "CHANGE_PASSWORD");
+        eventPublisher.publishOtpEmail(account.getEmail(), resolveDisplayName(null, account.getEmail()), otp, "CHANGE_PASSWORD");
     }
 
     @Transactional
@@ -312,12 +347,12 @@ public class AuthService {
 
     @Transactional
     public void verifyEmail(String token) {
-        String accountIdStr = otpService.getAccountIdByVerifyToken(token);
-        if (accountIdStr == null) {
+        VerifyEmailTokenPayload payload = otpService.getVerifyEmailPayload(token);
+        if (payload == null || payload.accountId() == null) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
         }
 
-        UUID accountId = UUID.fromString(accountIdStr);
+        UUID accountId = UUID.fromString(payload.accountId());
         Account account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
 
@@ -325,11 +360,20 @@ public class AuthService {
             account.setEmailVerified(true);
             account.setStatus(iuh.fit.authservice.account.enums.AccountStatus.ACTIVE);
             accountRepository.save(account);
-            
-            eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), account.getFullName(), account.getPhoneNumber());
+
+            String displayName = resolveDisplayName(payload.fullName(), account.getEmail());
+            String phoneNumber = payload.phoneNumber() != null ? payload.phoneNumber() : "";
+            eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), displayName, phoneNumber, account.getRole().name());
         }
         
         otpService.deleteVerifyToken(token);
+    }
+
+    private String resolveDisplayName(String fullName, String email) {
+        if (fullName != null && !fullName.isBlank()) {
+            return fullName.trim();
+        }
+        return email != null ? email : "";
     }
 
     private AuthTokenPair issueTokenPair(Account account, String deviceInfo, String ipAddress) {

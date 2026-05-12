@@ -53,9 +53,9 @@ public class EventPublisherService {
         }
     }
 
-    public void publishAccountCreatedEvent(String accountId, String email, String fullName, String phoneNumber) {
+    public void publishAccountCreatedEvent(String accountId, String email, String fullName, String phoneNumber, String role) {
         try {
-            var event = new AccountRegisteredEvent(accountId, email, fullName, phoneNumber);
+            var event = new AccountRegisteredEvent(accountId, email, fullName, phoneNumber, role);
             rabbitTemplate.convertAndSend(criticalExchange, accountCreatedRoutingKey, event);
             log.info("[EventPublisher] Published ACCOUNT_CREATED event for email={}", email);
         } catch (Exception e) {

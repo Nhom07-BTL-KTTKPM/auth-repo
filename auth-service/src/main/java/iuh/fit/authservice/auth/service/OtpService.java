@@ -1,5 +1,7 @@
 package iuh.fit.authservice.auth.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import iuh.fit.authservice.auth.dto.VerifyEmailTokenPayload;
 import iuh.fit.shared.error.BusinessException;
 import iuh.fit.shared.error.ErrorCode;
 import org.springframework.beans.factory.annotation.Value;
@@ -15,6 +17,7 @@ public class OtpService {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final RedisTemplate<String, Object> redisTemplate;
+    private final ObjectMapper objectMapper;
     private final int otpLength;
     private final Duration otpTtl;
     private final String forgotKeyPrefix;
@@ -24,6 +27,7 @@ public class OtpService {
 
     public OtpService(
             RedisTemplate<String, Object> redisTemplate,
+            ObjectMapper objectMapper,
             @Value("${auth.otp.length:6}") int otpLength,
             @Value("${auth.otp.ttl:5m}") Duration otpTtl,
             @Value("${auth.otp.forgot-password-key-prefix:otp:forgot:}") String forgotKeyPrefix,
@@ -32,6 +36,7 @@ public class OtpService {
             @Value("${auth.verify-email.key-prefix:verify:}") String verifyKeyPrefix
     ) {
         this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
         this.otpLength = otpLength;
         this.otpTtl = otpTtl;
         this.forgotKeyPrefix = forgotKeyPrefix;
@@ -79,14 +84,25 @@ public class OtpService {
 
     // ── Verify Email Token ────────────────────────────────────────────────────
 
-    public String generateAndSaveVerifyToken(String accountId) {
+    public String generateAndSaveVerifyToken(String accountId, String fullName, String phoneNumber) {
         String token = java.util.UUID.randomUUID().toString();
-        redisTemplate.opsForValue().set(verifyKeyPrefix + token, accountId, verifyTokenTtl);
+        VerifyEmailTokenPayload payload = new VerifyEmailTokenPayload(accountId, fullName, phoneNumber);
+        redisTemplate.opsForValue().set(verifyKeyPrefix + token, payload, verifyTokenTtl);
         return token;
     }
 
-    public String getAccountIdByVerifyToken(String token) {
-        return getStringValue(verifyKeyPrefix + token);
+    public VerifyEmailTokenPayload getVerifyEmailPayload(String token) {
+        Object raw = redisTemplate.opsForValue().get(verifyKeyPrefix + token);
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof VerifyEmailTokenPayload payload) {
+            return payload;
+        }
+        if (raw instanceof String accountId) {
+            return new VerifyEmailTokenPayload(accountId, null, null);
+        }
+        return objectMapper.convertValue(raw, VerifyEmailTokenPayload.class);
     }
 
     public void deleteVerifyToken(String token) {
