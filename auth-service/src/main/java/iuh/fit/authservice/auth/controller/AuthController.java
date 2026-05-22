@@ -11,6 +11,7 @@ import iuh.fit.authservice.auth.dto.RefreshTokenRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
 import iuh.fit.authservice.auth.dto.RegisterResponse;
 import iuh.fit.authservice.auth.dto.ResetPasswordRequest;
+import iuh.fit.authservice.auth.dto.UpdateAvatarRequest;
 import iuh.fit.authservice.auth.service.AuthService;
 import iuh.fit.authservice.security.RefreshTokenCookieService;
 import iuh.fit.shared.api.ApiResponse;
@@ -152,6 +153,20 @@ public class AuthController {
         data.put("expiresAt", jwt.getExpiresAt());
 
         return ResponseEntity.ok(ApiResponse.success(data, "Current user profile", resolveTraceId(servletRequest)));
+    }
+
+    @PutMapping("/me/avatar")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> updateAvatar(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody UpdateAvatarRequest request,
+            HttpServletRequest servletRequest
+    ) {
+        if (jwt == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Authentication required");
+        }
+
+        Map<String, Object> data = authService.updateAvatar(jwt.getSubject(), request);
+        return ResponseEntity.ok(ApiResponse.success(data, "Avatar updated successfully", resolveTraceId(servletRequest)));
     }
 
     @GetMapping("/claims")

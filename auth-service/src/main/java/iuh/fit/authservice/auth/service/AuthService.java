@@ -6,6 +6,7 @@ import iuh.fit.authservice.account.enums.AccountRole;
 import iuh.fit.authservice.account.enums.AccountStatus;
 import iuh.fit.authservice.account.enums.AuthProvider;
 import iuh.fit.authservice.auth.dto.AuthTokenPair;
+import iuh.fit.authservice.auth.dto.UpdateAvatarRequest;
 import iuh.fit.authservice.auth.dto.LoginRequest;
 import iuh.fit.authservice.auth.dto.RegisterRequest;
 import iuh.fit.authservice.auth.dto.RegisterResponse;
@@ -288,6 +289,26 @@ public class AuthService {
         data.put("lastLoginAt", account.getLastLoginAt());
         data.put("createdAt", account.getCreatedAt());
         
+        return data;
+    }
+
+    @Transactional
+    public Map<String, Object> updateAvatar(String accountIdStr, UpdateAvatarRequest request) {
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        String avatarUrl = request.avatarUrl() != null ? request.avatarUrl().trim() : "";
+        if (avatarUrl.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Avatar URL is required");
+        }
+
+        account.setAvatarUrl(avatarUrl);
+        accountRepository.save(account);
+
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("accountId", account.getId().toString());
+        data.put("avatarUrl", account.getAvatarUrl());
         return data;
     }
 
