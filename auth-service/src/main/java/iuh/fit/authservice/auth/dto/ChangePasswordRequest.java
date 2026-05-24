@@ -5,6 +5,6 @@ import jakarta.validation.constraints.Size;
 
 public record ChangePasswordRequest(
         @NotBlank String otp,
-        @NotBlank String oldPassword,
+        String oldPassword,
         @NotBlank @Size(min = 8) String newPassword
 ) {}
