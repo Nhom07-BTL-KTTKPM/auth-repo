@@ -284,6 +284,7 @@ public class AuthService {
         data.put("role", account.getRole().name());
         data.put("status", account.getStatus().name());
         data.put("provider", account.getProvider().name());
+        data.put("hasPassword", account.getPasswordHash() != null && !account.getPasswordHash().isBlank());
         data.put("avatarUrl", account.getAvatarUrl());
         data.put("emailVerified", account.getEmailVerified());
         data.put("lastLoginAt", account.getLastLoginAt());
@@ -354,8 +355,15 @@ public class AuthService {
         Account account = accountRepository.findById(accountId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
 
-        if (!passwordEncoder.matches(request.oldPassword(), account.getPasswordHash())) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
+        String currentPasswordHash = account.getPasswordHash();
+        if (currentPasswordHash != null && !currentPasswordHash.isBlank()) {
+            if (request.oldPassword() == null || request.oldPassword().isBlank()) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "Old password is required");
+            }
+
+            if (!passwordEncoder.matches(request.oldPassword(), currentPasswordHash)) {
+                throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
+            }
         }
 
         otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
