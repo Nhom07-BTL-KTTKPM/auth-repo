@@ -24,6 +24,7 @@ public class OtpService {
     private final String changeKeyPrefix;
     private final Duration verifyTokenTtl;
     private final String verifyKeyPrefix;
+    private final String verifyAccountKeyPrefix;
 
     public OtpService(
             RedisTemplate<String, Object> redisTemplate,
@@ -33,7 +34,8 @@ public class OtpService {
             @Value("${auth.otp.forgot-password-key-prefix:otp:forgot:}") String forgotKeyPrefix,
             @Value("${auth.otp.change-password-key-prefix:otp:change:}") String changeKeyPrefix,
             @Value("${auth.verify-email.token-ttl:24h}") Duration verifyTokenTtl,
-            @Value("${auth.verify-email.key-prefix:verify:}") String verifyKeyPrefix
+            @Value("${auth.verify-email.key-prefix:verify:}") String verifyKeyPrefix,
+            @Value("${auth.verify-email.account-key-prefix:verify:account:}") String verifyAccountKeyPrefix
     ) {
         this.redisTemplate = redisTemplate;
         this.objectMapper = objectMapper;
@@ -43,6 +45,7 @@ public class OtpService {
         this.changeKeyPrefix = changeKeyPrefix;
         this.verifyTokenTtl = verifyTokenTtl;
         this.verifyKeyPrefix = verifyKeyPrefix;
+        this.verifyAccountKeyPrefix = verifyAccountKeyPrefix;
     }
 
     // ── OTP ──────────────────────────────────────────────────────────────────
@@ -87,8 +90,25 @@ public class OtpService {
     public String generateAndSaveVerifyToken(String accountId, String fullName, String phoneNumber) {
         String token = java.util.UUID.randomUUID().toString();
         VerifyEmailTokenPayload payload = new VerifyEmailTokenPayload(accountId, fullName, phoneNumber);
+        String accountKey = verifyAccountKeyPrefix + accountId;
+        String previousToken = getStringValue(accountKey);
+
+        if (previousToken != null && !previousToken.isBlank()) {
+            redisTemplate.delete(verifyKeyPrefix + previousToken);
+        }
+
         redisTemplate.opsForValue().set(verifyKeyPrefix + token, payload, verifyTokenTtl);
+        redisTemplate.opsForValue().set(accountKey, token, verifyTokenTtl);
         return token;
+    }
+
+    public boolean isCurrentVerifyToken(String accountId, String token) {
+        if (accountId == null || accountId.isBlank() || token == null || token.isBlank()) {
+            return false;
+        }
+
+        String currentToken = getStringValue(verifyAccountKeyPrefix + accountId);
+        return token.equals(currentToken);
     }
 
     public VerifyEmailTokenPayload getVerifyEmailPayload(String token) {
@@ -106,6 +126,10 @@ public class OtpService {
     }
 
     public void deleteVerifyToken(String token) {
+        VerifyEmailTokenPayload payload = getVerifyEmailPayload(token);
+        if (payload != null && payload.accountId() != null && !payload.accountId().isBlank()) {
+            redisTemplate.delete(verifyAccountKeyPrefix + payload.accountId());
+        }
         redisTemplate.delete(verifyKeyPrefix + token);
     }
 

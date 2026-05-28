@@ -51,7 +51,7 @@ public class AuthController {
     ) {
         RegisterResponse response = authService.register(request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success(response, "Register successful", resolveTraceId(servletRequest)));
+            .body(ApiResponse.success(response, "Registration submitted. Please verify your email to complete signup.", resolveTraceId(servletRequest)));
     }
 
     @PostMapping("internal/register")
@@ -61,7 +61,7 @@ public class AuthController {
     ) {
         RegisterResponse response = authService.createInternalAccount(request, AccountRole.EMPLOYEE);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.success(response, "Internal account created successfully", resolveTraceId(servletRequest)));
+            .body(ApiResponse.success(response, "Internal account created successfully", resolveTraceId(servletRequest)));
     }
     
     

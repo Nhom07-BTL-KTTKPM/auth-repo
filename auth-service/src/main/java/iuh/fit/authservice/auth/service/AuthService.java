@@ -78,35 +78,44 @@ public class AuthService {
         String fullName = request.fullName() != null ? request.fullName().trim() : "";
         String phoneNumber = request.phoneNumber() != null ? request.phoneNumber().trim() : "";
 
-        if (accountRepository.existsByEmailIgnoreCase(email)) {
-            throw new BusinessException(
-                    ErrorCode.CONFLICT,
-                    "Email already exists",
-                    Map.of("email", email)
-            );
+        Account account = accountRepository.findByEmailIgnoreCase(email).orElse(null);
+
+        if (account != null) {
+            if (account.getProvider() != AuthProvider.LOCAL || account.getStatus() != AccountStatus.PENDING_VERIFY) {
+                throw new BusinessException(
+                        ErrorCode.CONFLICT,
+                        "Email already exists",
+                        Map.of("email", email)
+                );
+            }
+
+            account.setPasswordHash(passwordEncoder.encode(request.password()));
+            account = accountRepository.save(account);
+        } else {
+            account = new Account();
+            account.setEmail(email);
+            account.setPasswordHash(passwordEncoder.encode(request.password()));
+            account.setRole(AccountRole.CUSTOMER);
+            account.setStatus(AccountStatus.PENDING_VERIFY);
+            account.setProvider(AuthProvider.LOCAL);
+            account.setEmailVerified(false);
+
+            try {
+                account = accountRepository.save(account);
+            } catch (DataIntegrityViolationException ex) {
+                throw new BusinessException(
+                        ErrorCode.CONFLICT,
+                        "Email already exists",
+                        Map.of("email", email)
+                );
+            }
         }
 
-        Account account = new Account();
-        account.setEmail(email);
-        account.setPasswordHash(passwordEncoder.encode(request.password()));
-        account.setRole(AccountRole.CUSTOMER);
-        account.setStatus(AccountStatus.PENDING_VERIFY);
-        account.setProvider(AuthProvider.LOCAL);
-        account.setEmailVerified(false);
+        // Gửi email xác thực mới nhất qua notification-service
+        String verifyToken = otpService.generateAndSaveVerifyToken(account.getId().toString(), fullName, phoneNumber);
+        eventPublisher.publishVerifyEmail(account.getEmail(), fullName, verifyToken);
 
-        try {
-            Account saved = accountRepository.save(account);
-            // Gửi email xác thực qua notification-service
-            String verifyToken = otpService.generateAndSaveVerifyToken(saved.getId().toString(), fullName, phoneNumber);
-            eventPublisher.publishVerifyEmail(saved.getEmail(), fullName, verifyToken);
-            return new RegisterResponse(saved.getId(), saved.getEmail(), saved.getRole().name());
-        } catch (DataIntegrityViolationException ex) {
-            throw new BusinessException(
-                    ErrorCode.CONFLICT,
-                    "Email already exists",
-                    Map.of("email", email)
-            );
-        }
+        return new RegisterResponse(account.getId(), account.getEmail(), account.getRole().name());
     }
 
     @Transactional
@@ -378,6 +387,10 @@ public class AuthService {
     public void verifyEmail(String token) {
         VerifyEmailTokenPayload payload = otpService.getVerifyEmailPayload(token);
         if (payload == null || payload.accountId() == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
+        }
+
+        if (!otpService.isCurrentVerifyToken(payload.accountId(), token)) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
         }
 
