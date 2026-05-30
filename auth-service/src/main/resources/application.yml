@@ -32,11 +32,11 @@ eureka:
     register-with-eureka: true
     fetch-registry: true
     service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE}
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
   instance:
-    prefer-ip-address: ${EUREKA_INSTANCE_PREFER_IP_ADDRESS}
-    ip-address: ${EUREKA_INSTANCE_IP_ADDRESS}
-    hostname: ${EUREKA_INSTANCE_HOSTNAME}
+    prefer-ip-address: ${EUREKA_INSTANCE_PREFER_IP_ADDRESS:true}
+    ip-address: ${EUREKA_INSTANCE_IP_ADDRESS:127.0.0.1}
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
 
 
 
@@ -76,6 +76,7 @@ auth:
   verify-email:
     token-ttl: ${AUTH_VERIFY_TOKEN_TTL}
     key-prefix: ${AUTH_VERIFY_KEY_PREFIX}
+    account-key-prefix: ${AUTH_VERIFY_ACCOUNT_KEY_PREFIX:verify:account:}
 
   # RabbitMQ event publishing
   rabbitmq:
