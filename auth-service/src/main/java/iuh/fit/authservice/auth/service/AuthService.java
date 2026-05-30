@@ -1,0 +1,453 @@
+package iuh.fit.authservice.auth.service;
+
+import iuh.fit.authservice.account.entity.Account;
+import iuh.fit.authservice.account.repository.AccountRepository;
+import iuh.fit.authservice.account.enums.AccountRole;
+import iuh.fit.authservice.account.enums.AccountStatus;
+import iuh.fit.authservice.account.enums.AuthProvider;
+import iuh.fit.authservice.auth.dto.AuthTokenPair;
+import iuh.fit.authservice.auth.dto.UpdateAvatarRequest;
+import iuh.fit.authservice.auth.dto.LoginRequest;
+import iuh.fit.authservice.auth.dto.RegisterRequest;
+import iuh.fit.authservice.auth.dto.RegisterResponse;
+import iuh.fit.authservice.auth.dto.VerifyEmailTokenPayload;
+import iuh.fit.authservice.security.JwtTokenProvider;
+import iuh.fit.authservice.token.model.RefreshToken;
+import iuh.fit.authservice.token.service.RefreshTokenService;
+import iuh.fit.shared.error.BusinessException;
+import iuh.fit.shared.error.ErrorCode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import iuh.fit.authservice.auth.dto.ChangePasswordRequest;
+import iuh.fit.authservice.auth.dto.ForgotPasswordRequest;
+import iuh.fit.authservice.auth.dto.ResetPasswordRequest;
+
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
+import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import org.springframework.beans.factory.annotation.Value;
+
+import java.util.Collections;
+
+import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
+
+@Service
+public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
+    private final AccountRepository accountRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final RefreshTokenService refreshTokenService;
+    private final OtpService otpService;
+    private final EventPublisherService eventPublisher;
+    private final GoogleIdTokenVerifier googleIdTokenVerifier;
+
+    public AuthService(
+            AccountRepository accountRepository,
+            PasswordEncoder passwordEncoder,
+            JwtTokenProvider jwtTokenProvider,
+            RefreshTokenService refreshTokenService,
+            OtpService otpService,
+            EventPublisherService eventPublisher,
+            @Value("${auth.google.client-id}") String googleClientId
+    ) {
+        this.accountRepository = accountRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtTokenProvider = jwtTokenProvider;
+        this.refreshTokenService = refreshTokenService;
+        this.otpService = otpService;
+        this.eventPublisher = eventPublisher;
+        this.googleIdTokenVerifier = new GoogleIdTokenVerifier.Builder(new NetHttpTransport(), new GsonFactory())
+                .setAudience(Collections.singletonList(googleClientId))
+                .build();
+    }
+
+    @Transactional
+    public RegisterResponse register(RegisterRequest request) {
+        String email = normalizeEmail(request.email());
+        String fullName = request.fullName() != null ? request.fullName().trim() : "";
+        String phoneNumber = request.phoneNumber() != null ? request.phoneNumber().trim() : "";
+
+        Account account = accountRepository.findByEmailIgnoreCase(email).orElse(null);
+
+        if (account != null) {
+            if (account.getProvider() != AuthProvider.LOCAL || account.getStatus() != AccountStatus.PENDING_VERIFY) {
+                throw new BusinessException(
+                        ErrorCode.CONFLICT,
+                        "Email already exists",
+                        Map.of("email", email)
+                );
+            }
+
+            account.setPasswordHash(passwordEncoder.encode(request.password()));
+            account = accountRepository.save(account);
+        } else {
+            account = new Account();
+            account.setEmail(email);
+            account.setPasswordHash(passwordEncoder.encode(request.password()));
+            account.setRole(AccountRole.CUSTOMER);
+            account.setStatus(AccountStatus.PENDING_VERIFY);
+            account.setProvider(AuthProvider.LOCAL);
+            account.setEmailVerified(false);
+
+            try {
+                account = accountRepository.save(account);
+            } catch (DataIntegrityViolationException ex) {
+                throw new BusinessException(
+                        ErrorCode.CONFLICT,
+                        "Email already exists",
+                        Map.of("email", email)
+                );
+            }
+        }
+
+        // Gửi email xác thực mới nhất qua notification-service
+        String verifyToken = otpService.generateAndSaveVerifyToken(account.getId().toString(), fullName, phoneNumber);
+        eventPublisher.publishVerifyEmail(account.getEmail(), fullName, verifyToken);
+
+        return new RegisterResponse(account.getId(), account.getEmail(), account.getRole().name());
+    }
+
+    @Transactional
+    public RegisterResponse createInternalAccount(RegisterRequest request, AccountRole role) {
+        String email = normalizeEmail(request.email());
+        String fullName = request.fullName() != null ? request.fullName().trim() : "";
+        String phoneNumber = request.phoneNumber() != null ? request.phoneNumber().trim() : "";
+        // 1. Kiểm tra email tồn tại
+        if (accountRepository.existsByEmailIgnoreCase(email)) {
+            throw new BusinessException(
+                    ErrorCode.CONFLICT,
+                    "Email already exists",
+                    Map.of("email", email)
+            );
+        }
+
+        Account account = new Account();
+        account.setEmail(email);
+        account.setPasswordHash(passwordEncoder.encode(request.password()));
+        account.setRole(role);
+        account.setStatus(AccountStatus.ACTIVE);
+        account.setProvider(AuthProvider.LOCAL);
+        account.setEmailVerified(true);
+
+        account = accountRepository.save(account);
+
+        // 3. Gửi sự kiện tạo Account kèm theo Role
+        eventPublisher.publishAccountCreatedEvent(
+                account.getId().toString(),
+                account.getEmail(),
+                fullName,
+                phoneNumber,
+                account.getRole().name()
+        );
+
+        return new RegisterResponse(account.getId(), account.getEmail(), account.getRole().name());
+    }
+
+    @Transactional(readOnly = true)
+    public AuthTokenPair login(LoginRequest request, String deviceInfo, String ipAddress) {
+        String email = normalizeEmail(request.email());
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password"));
+
+        if (account.getStatus() != AccountStatus.ACTIVE) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "User account is disabled or pending verification");
+        }
+        if (account.getPasswordHash() == null || !passwordEncoder.matches(request.password(), account.getPasswordHash())) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
+        }
+        
+        account.setLastLoginAt(java.time.Instant.now());
+        accountRepository.save(account);
+
+        return issueTokenPair(account, deviceInfo, ipAddress);
+    }
+
+    @Transactional
+    public AuthTokenPair loginWithGoogle(String idTokenString, String deviceInfo, String ipAddress) {
+        try {
+            GoogleIdToken idToken = googleIdTokenVerifier.verify(idTokenString);
+            if (idToken == null) {
+                throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid Google ID token");
+            }
+            GoogleIdToken.Payload payload = idToken.getPayload();
+            String email = normalizeEmail(payload.getEmail());
+            String fullName = payload.get("name") != null ? payload.get("name").toString() : "";
+            String phoneNumber = "";
+            
+            Account account = accountRepository.findByEmailIgnoreCase(email).orElse(null);
+            
+            if (account == null) {
+                // Register new account
+                account = new Account();
+                account.setEmail(email);
+                account.setRole(AccountRole.CUSTOMER);
+                account.setStatus(AccountStatus.ACTIVE);
+                account.setProvider(AuthProvider.GOOGLE);
+                account.setEmailVerified(true);
+                account.setAvatarUrl((String) payload.get("picture"));
+                account.setProviderId(payload.getSubject());
+                account = accountRepository.save(account);
+                
+                // Publish event to user-service
+                eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber, account.getRole().name());
+            } else {
+                // Account exists. If provider is LOCAL, link it by updating status to ACTIVE (since Google verified the email)
+                if (account.getProvider() == AuthProvider.LOCAL) {
+                    account.setEmailVerified(true);
+                    if (account.getStatus() == AccountStatus.PENDING_VERIFY) {
+                        account.setStatus(AccountStatus.ACTIVE);
+                        // Publish event since it's now active
+                        eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), resolveDisplayName(fullName, account.getEmail()), phoneNumber, account.getRole().name());
+                    }
+                    accountRepository.save(account);
+                } else if (account.getStatus() != AccountStatus.ACTIVE) {
+                    throw new BusinessException(ErrorCode.FORBIDDEN, "User account is disabled");
+                }
+            }
+            
+            account.setLastLoginAt(java.time.Instant.now());
+            accountRepository.save(account);
+            
+            return issueTokenPair(account, deviceInfo, ipAddress);
+        } catch (BusinessException e) {
+            throw e; // Re-throw known business errors as-is
+        } catch (Exception e) {
+            log.error("Google login failed", e);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid Google ID token or verification failed");
+        }
+    }
+
+    public AuthTokenPair refresh(String refreshTokenId, String deviceInfo, String ipAddress) {
+        RefreshToken current = refreshTokenService.getByTokenId(refreshTokenId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid refresh token"));
+
+        if (current.isRevoked() || current.isExpired()) {
+            refreshTokenService.logout(current.getTokenId());
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Refresh token is expired or revoked");
+        }
+
+        String newRefreshTokenId = jwtTokenProvider.generateRefreshTokenId();
+        RefreshToken rotated = RefreshToken.builder()
+                .tokenId(newRefreshTokenId)
+                .tokenValue(newRefreshTokenId)
+                .accountId(current.getAccountId())
+                .email(current.getEmail())
+                .role(current.getRole())
+                .createdAt(current.getCreatedAt())
+                .expiresAt(jwtTokenProvider.calculateRefreshTokenExpiresAt())
+                .deviceInfo(deviceInfo)
+                .ipAddress(ipAddress)
+                .revoked(false)
+                .build();
+
+        refreshTokenService.rotate(current.getTokenId(), rotated);
+
+        String accessToken = jwtTokenProvider.generateAccessToken(
+                rotated.getAccountId(),
+                rotated.getEmail(),
+                rotated.getRole()
+        );
+
+        return new AuthTokenPair(
+                accessToken,
+                jwtTokenProvider.accessTokenExpiresInSeconds(),
+                rotated.getTokenId(),
+                jwtTokenProvider.refreshTokenExpiresInSeconds()
+        );
+    }
+
+    public void logout(String refreshTokenId) {
+        boolean removed = refreshTokenService.revoke(refreshTokenId);
+        if (!removed) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Refresh token not found");
+        }
+    }
+
+    public Map<String, Object> parseAndValidateClaims(String accessToken) {
+        if (!jwtTokenProvider.validateAccessToken(accessToken)) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid access token");
+        }
+        return jwtTokenProvider.parseClaimsMap(accessToken);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getProfile(String accountIdStr) {
+        java.util.UUID accountId = java.util.UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+        
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("accountId", account.getId().toString());
+        data.put("email", account.getEmail());
+        data.put("role", account.getRole().name());
+        data.put("status", account.getStatus().name());
+        data.put("provider", account.getProvider().name());
+        data.put("hasPassword", account.getPasswordHash() != null && !account.getPasswordHash().isBlank());
+        data.put("avatarUrl", account.getAvatarUrl());
+        data.put("emailVerified", account.getEmailVerified());
+        data.put("lastLoginAt", account.getLastLoginAt());
+        data.put("createdAt", account.getCreatedAt());
+        
+        return data;
+    }
+
+    @Transactional
+    public Map<String, Object> updateAvatar(String accountIdStr, UpdateAvatarRequest request) {
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        String avatarUrl = request.avatarUrl() != null ? request.avatarUrl().trim() : "";
+        if (avatarUrl.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Avatar URL is required");
+        }
+
+        account.setAvatarUrl(avatarUrl);
+        accountRepository.save(account);
+
+        Map<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("accountId", account.getId().toString());
+        data.put("avatarUrl", account.getAvatarUrl());
+        return data;
+    }
+
+    // ── Forgot Password ───────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public void forgotPassword(ForgotPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
+
+        String otp = otpService.generateAndSaveForgotPasswordOtp(email);
+        eventPublisher.publishOtpEmail(email, resolveDisplayName(null, email), otp, "FORGOT_PASSWORD");
+    }
+
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        otpService.verifyForgotPasswordOtp(email, request.otp());
+
+        Account account = accountRepository.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Email not found"));
+
+        account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        accountRepository.save(account);
+    }
+
+    // ── Change Password (cần đăng nhập) ──────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public void requestChangePassword(String accountIdStr) {
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        String otp = otpService.generateAndSaveChangePasswordOtp(accountIdStr);
+        eventPublisher.publishOtpEmail(account.getEmail(), resolveDisplayName(null, account.getEmail()), otp, "CHANGE_PASSWORD");
+    }
+
+    @Transactional
+    public void confirmChangePassword(String accountIdStr, ChangePasswordRequest request) {
+        UUID accountId = UUID.fromString(accountIdStr);
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        String currentPasswordHash = account.getPasswordHash();
+        if (currentPasswordHash != null && !currentPasswordHash.isBlank()) {
+            if (request.oldPassword() == null || request.oldPassword().isBlank()) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "Old password is required");
+            }
+
+            if (!passwordEncoder.matches(request.oldPassword(), currentPasswordHash)) {
+                throw new BusinessException(ErrorCode.UNAUTHORIZED, "Old password is incorrect");
+            }
+        }
+
+        otpService.verifyChangePasswordOtp(accountIdStr, request.otp());
+
+        account.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        accountRepository.save(account);
+    }
+
+    // ── Verify Email ──────────────────────────────────────────────────────────
+
+    @Transactional
+    public void verifyEmail(String token) {
+        VerifyEmailTokenPayload payload = otpService.getVerifyEmailPayload(token);
+        if (payload == null || payload.accountId() == null) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
+        }
+
+        if (!otpService.isCurrentVerifyToken(payload.accountId(), token)) {
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Verification token expired or invalid");
+        }
+
+        UUID accountId = UUID.fromString(payload.accountId());
+        Account account = accountRepository.findById(accountId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "Account not found"));
+
+        if (account.getStatus() == AccountStatus.PENDING_VERIFY) {
+            account.setEmailVerified(true);
+            account.setStatus(iuh.fit.authservice.account.enums.AccountStatus.ACTIVE);
+            accountRepository.save(account);
+
+            String displayName = resolveDisplayName(payload.fullName(), account.getEmail());
+            String phoneNumber = payload.phoneNumber() != null ? payload.phoneNumber() : "";
+            eventPublisher.publishAccountCreatedEvent(account.getId().toString(), account.getEmail(), displayName, phoneNumber, account.getRole().name());
+        }
+        
+        otpService.deleteVerifyToken(token);
+    }
+
+    private String resolveDisplayName(String fullName, String email) {
+        if (fullName != null && !fullName.isBlank()) {
+            return fullName.trim();
+        }
+        return email != null ? email : "";
+    }
+
+    private AuthTokenPair issueTokenPair(Account account, String deviceInfo, String ipAddress) {
+        String accessToken = jwtTokenProvider.generateAccessToken(account.getId(), account.getEmail(), account.getRole().name());
+
+        String refreshTokenId = jwtTokenProvider.generateRefreshTokenId();
+        RefreshToken refreshToken = RefreshToken.builder()
+                .tokenId(refreshTokenId)
+                .tokenValue(refreshTokenId)
+                .accountId(account.getId())
+                .email(account.getEmail())
+                .role(account.getRole().name())
+                .expiresAt(jwtTokenProvider.calculateRefreshTokenExpiresAt())
+                .deviceInfo(deviceInfo)
+                .ipAddress(ipAddress)
+                .revoked(false)
+                .build();
+
+        refreshTokenService.create(refreshToken);
+
+        return new AuthTokenPair(
+                accessToken,
+                jwtTokenProvider.accessTokenExpiresInSeconds(),
+                refreshTokenId,
+                jwtTokenProvider.refreshTokenExpiresInSeconds()
+        );
+    }
+
+    private static String normalizeEmail(String email) {
+        if (email == null) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Email must not be null");
+        }
+        return email.trim().toLowerCase(Locale.ROOT);
+    }
+}

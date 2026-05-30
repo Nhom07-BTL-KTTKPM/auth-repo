@@ -1,0 +1,9 @@
+eureka:
+  client:
+    enabled: false
+
+feign:
+  client:
+    config:
+      user-service:
+        url: http://user-service:8080

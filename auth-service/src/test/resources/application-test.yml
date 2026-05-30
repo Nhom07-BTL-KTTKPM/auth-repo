@@ -1,0 +1,84 @@
+# Force override of placeholders in application.yml
+SPRING_DATASOURCE_URL: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+SPRING_DATASOURCE_USERNAME: sa
+SPRING_DATASOURCE_PASSWORD: ""
+SPRING_JPA_HIBERNATE_DDL_AUTO: create-drop
+SPRING_DATA_REDIS_HOST: localhost
+SPRING_DATA_REDIS_PORT: 6379
+SPRING_DATA_REDIS_PASSWORD: ""
+SPRING_DATA_REDIS_TIMEOUT: 2s
+RABBITMQ_HOST: localhost
+RABBITMQ_PORT: 5672
+RABBITMQ_USERNAME: guest
+RABBITMQ_PASSWORD: guest
+SERVER_PORT: 0
+EUREKA_DEFAULT_ZONE: http://localhost:8761/eureka/
+EUREKA_INSTANCE_PREFER_IP_ADDRESS: true
+EUREKA_INSTANCE_IP_ADDRESS: 127.0.0.1
+EUREKA_INSTANCE_HOSTNAME: localhost
+AUTH_JWT_ISSUER: auth-service
+AUTH_JWT_SECRET: NUQyuZhoBd6u6O6dAP30Rgu5bqv5TdzpKreGhZGExSaHXEQIM3kicw9uptSaJP9Q
+AUTH_JWT_ACCESS_TOKEN_EXPIRATION: 15m
+AUTH_JWT_REFRESH_TOKEN_EXPIRATION: 7d
+AUTH_GOOGLE_CLIENT_ID: mock-google-client-id
+AUTH_REDIS_REFRESH_TOKEN_KEY_PREFIX: "refresh:"
+AUTH_COOKIE_REFRESH_TOKEN_NAME: refreshTokenId
+AUTH_COOKIE_SECURE: false
+AUTH_COOKIE_HTTP_ONLY: true
+AUTH_COOKIE_SAME_SITE: Strict
+AUTH_COOKIE_PATH: /api/v1/auth
+AUTH_COOKIE_DOMAIN: ""
+AUTH_RATE_LIMIT_LOGIN_REGISTER_ENABLED: false
+AUTH_RATE_LIMIT_LOGIN_REGISTER_CAPACITY: 5
+AUTH_RATE_LIMIT_LOGIN_REGISTER_REFILL_TOKENS: 5
+AUTH_RATE_LIMIT_LOGIN_REGISTER_REFILL_DURATION: 1m
+AUTH_RATE_LIMIT_LOGIN_REGISTER_KEY_PREFIX: "auth:rate-limit:"
+AUTH_OTP_LENGTH: 6
+AUTH_OTP_TTL: 5m
+AUTH_OTP_FORGOT_KEY_PREFIX: "otp:forgot:"
+AUTH_OTP_CHANGE_KEY_PREFIX: "otp:change:"
+AUTH_VERIFY_TOKEN_TTL: 24h
+AUTH_VERIFY_KEY_PREFIX: "verify:"
+AUTH_RABBITMQ_CRITICAL_EXCHANGE: critical.exchange
+AUTH_RABBITMQ_NOTIFICATION_EXCHANGE: notification.exchange
+AUTH_RABBITMQ_ROUTING_EMAIL_VERIFY: email.verify
+AUTH_RABBITMQ_ROUTING_EMAIL_OTP: email.otp
+AUTH_RABBITMQ_ROUTING_ACCOUNT_CREATED: account.created
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  data:
+    redis:
+      repositories:
+        enabled: false
+  rabbitmq:
+    listener:
+      auto-startup: false
+  cloud:
+    discovery:
+      enabled: false
+
+eureka:
+  client:
+    enabled: false
+    register-with-eureka: false
+    fetch-registry: false
+
+auth:
+  google:
+    client-id: mock-google-client-id
+  jwt:
+    secret: NUQyuZhoBd6u6O6dAP30Rgu5bqv5TdzpKreGhZGExSaHXEQIM3kicw9uptSaJP9Q
+    issuer: auth-service
+    access-token-expiration: 15m
+    refresh-token-expiration: 7d

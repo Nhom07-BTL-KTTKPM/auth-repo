@@ -1,0 +1,64 @@
+name: Build and Push Auth Service to GHCR
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+          server-id: github
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+
+      - name: Build JAR with Maven (CI Check)
+        run: |
+          cd auth-service
+          ./mvnw --batch-mode clean package -DskipTests
+        env:
+          MAVEN_USERNAME: ${{ github.actor }}
+          MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GHCR (CD Release)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx (CD Release)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push Docker Image (CD Release)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Convert organization/owner name to lowercase for Docker registry requirements
+          ORG_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG="ghcr.io/${ORG_LOWER}/auth-service:1.0.0"
+          
+          echo "Building and pushing image to ${IMAGE_TAG}..."
+          
+          docker build -t ${IMAGE_TAG} auth-service/
+          docker push ${IMAGE_TAG}
+          
+          # Also tag as latest
+          docker tag ${IMAGE_TAG} ghcr.io/${ORG_LOWER}/auth-service:latest
+          docker push ghcr.io/${ORG_LOWER}/auth-service:latest
