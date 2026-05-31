@@ -2,8 +2,11 @@ eureka:
   client:
     enabled: false
 
-feign:
-  client:
-    config:
-      user-service:
-        url: http://user-service:8080
+spring:
+  cloud:
+    openfeign:
+      client:
+        config:
+          user-service:
+            url: ${SPRING_CLOUD_OPENFEIGN_CLIENT_CONFIG_USER_SERVICE_URL:http://user-service:8080}
+
