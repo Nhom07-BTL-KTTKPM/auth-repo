@@ -30,8 +30,19 @@ public class AccountService {
     public List<CustomerInfor> getCustomerAccounts() {
         List<Account> accounts = accountRepository.findByRole(AccountRole.CUSTOMER);
         return accounts.stream().map(account -> {
-            CustomerResponse customerResponse = userClient.getCustomerByAccountId(account.getId().toString()).getBody().data();
-            return new CustomerInfor(account.getId(), account.getEmail(), account.getStatus(), customerResponse.getFullName(), customerResponse.getPhoneNumber());
+            String fullName = "N/A";
+            String phoneNumber = "N/A";
+            try {
+                var response = userClient.getCustomerByAccountId(account.getId().toString());
+                if (response != null && response.getBody() != null && response.getBody().data() != null) {
+                    CustomerResponse customerResponse = response.getBody().data();
+                    fullName = customerResponse.getFullName() != null ? customerResponse.getFullName() : "N/A";
+                    phoneNumber = customerResponse.getPhoneNumber() != null ? customerResponse.getPhoneNumber() : "N/A";
+                }
+            } catch (Exception e) {
+                // Log and gracefully return fallback info
+            }
+            return new CustomerInfor(account.getId(), account.getEmail(), account.getStatus(), fullName, phoneNumber);
         }).toList();
     }
 
@@ -39,8 +50,23 @@ public class AccountService {
     public List<EmployeeInfo> getEmployeeAccounts() {
         List<Account> accounts = accountRepository.findByRole(AccountRole.EMPLOYEE);
         return accounts.stream().map(account -> {
-            EmployeeResponse employeeResponse = userClient.getEmployeeByAccountId(account.getId().toString()).getBody().data();
-            return new EmployeeInfo(account.getId(), account.getEmail(), account.getStatus(), employeeResponse.getFullName(), employeeResponse.getPhoneNumber(), employeeResponse.getEmployeeCode(), employeeResponse.getHireDate());
+            String fullName = "N/A";
+            String phoneNumber = "N/A";
+            String employeeCode = "N/A";
+            java.time.LocalDate hireDate = null;
+            try {
+                var response = userClient.getEmployeeByAccountId(account.getId().toString());
+                if (response != null && response.getBody() != null && response.getBody().data() != null) {
+                    EmployeeResponse employeeResponse = response.getBody().data();
+                    fullName = employeeResponse.getFullName() != null ? employeeResponse.getFullName() : "N/A";
+                    phoneNumber = employeeResponse.getPhoneNumber() != null ? employeeResponse.getPhoneNumber() : "N/A";
+                    employeeCode = employeeResponse.getEmployeeCode() != null ? employeeResponse.getEmployeeCode() : "N/A";
+                    hireDate = employeeResponse.getHireDate();
+                }
+            } catch (Exception e) {
+                // Log and gracefully return fallback info
+            }
+            return new EmployeeInfo(account.getId(), account.getEmail(), account.getStatus(), fullName, phoneNumber, employeeCode, hireDate);
         }).toList();
     }
 
